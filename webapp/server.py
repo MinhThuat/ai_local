@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 # ---- Cấu hình (chỉnh ở đây) ----
 COMFY = os.environ.get("COMFY_URL", "http://127.0.0.1:8188")
+COMFY_TIMEOUT = int(os.environ.get("COMFY_TIMEOUT", "300"))  # nới cho lúc nạp model đầu (10GB chậm)
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -96,7 +97,7 @@ def comfy_upload(file: UploadFile) -> str:
         f"{COMFY}/upload/image",
         files={"image": (file.filename, file.file, file.content_type or "image/png")},
         data={"overwrite": "false"},
-        timeout=60,
+        timeout=COMFY_TIMEOUT,
     )
     r.raise_for_status()
     j = r.json()
@@ -107,7 +108,7 @@ def comfy_upload(file: UploadFile) -> str:
 
 
 def comfy_submit(wf: dict) -> str:
-    r = requests.post(f"{COMFY}/prompt", json={"prompt": wf}, timeout=60)
+    r = requests.post(f"{COMFY}/prompt", json={"prompt": wf}, timeout=COMFY_TIMEOUT)
     if r.status_code != 200:
         raise HTTPException(502, f"ComfyUI từ chối workflow: {r.text[:400]}")
     return r.json()["prompt_id"]
