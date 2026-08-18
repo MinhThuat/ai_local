@@ -126,13 +126,20 @@ def index():
 async def generate(prompt: str = Form(""), images: list[UploadFile] = File(...)):
     if not images:
         raise HTTPException(400, "Cần ít nhất 1 ảnh.")
-    prompt_en = translate_vi_en(prompt)
-    jobs = []
-    for img in images:
-        name = comfy_upload(img)
-        wf = build_job(name, prompt_en)
-        jobs.append(comfy_submit(wf))
-    return {"jobs": jobs, "prompt_en": prompt_en}
+    try:
+        prompt_en = translate_vi_en(prompt)
+        jobs = []
+        for img in images:
+            name = comfy_upload(img)
+            wf = build_job(name, prompt_en)
+            jobs.append(comfy_submit(wf))
+        return {"jobs": jobs, "prompt_en": prompt_en}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()  # in đầy đủ ra cửa sổ server
+        raise HTTPException(500, f"{type(e).__name__}: {e}")  # trả gọn về trình duyệt
 
 
 def _find_output_image(history_entry: dict):
