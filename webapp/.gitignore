@@ -1,0 +1,4 @@
+# File riêng của máy AI — export từ ComfyUI, KHÔNG đưa lên GitHub
+# (nếu track, git pull từ máy khác sẽ ghi đè/xoá mất)
+workflow_api.json
+__pycache__/

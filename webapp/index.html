@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gen ảnh Kontext</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; max-width: 780px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.2rem; }
+  #feed { display: flex; flex-direction: column-reverse; gap: 14px; margin-bottom: 120px; }
+  .card { border: 1px solid #8884; border-radius: 10px; padding: 10px; display: flex; gap: 12px; align-items: flex-start; }
+  .card img.in { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; flex: none; }
+  .card .body { flex: 1; min-width: 0; }
+  .card .status { font-size: .9rem; opacity: .8; }
+  .card img.out { max-width: 100%; border-radius: 6px; margin-top: 8px; display: block; }
+  .err { color: #c0392b; }
+  a.dl { display: inline-block; margin-top: 6px; font-size: .85rem; }
+  form { position: fixed; bottom: 0; left: 0; right: 0; background: Canvas; border-top: 1px solid #8884;
+         padding: 10px; display: flex; gap: 8px; align-items: flex-end; }
+  form .inner { max-width: 780px; margin: 0 auto; width: 100%; display: flex; gap: 8px; align-items: flex-end; }
+  textarea { flex: 1; min-height: 44px; max-height: 140px; padding: 8px; border-radius: 8px; border: 1px solid #8886; font: inherit; resize: vertical; }
+  button { padding: 10px 16px; border-radius: 8px; border: 0; background: #2d6cdf; color: #fff; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .pick { font-size: .85rem; }
+  #count { font-size: .8rem; opacity: .7; }
+</style>
+</head>
+<body>
+<h1>Gen ảnh Kontext (LAN)</h1>
+<p style="opacity:.7;font-size:.9rem">Chọn 1 hoặc nhiều ảnh, gõ lệnh (tiếng Việt), bấm Gửi. Mỗi ảnh ra 1 kết quả, hiện lần lượt.</p>
+
+<div id="feed"></div>
+
+<form id="f">
+  <div class="inner">
+    <div>
+      <label class="pick">📎 Ảnh<input id="files" type="file" accept="image/*" multiple hidden></label>
+      <div id="count"></div>
+    </div>
+    <textarea id="prompt" placeholder="Ví dụ: giữ nguyên thiết kế, chỉ đổi vải sang màu cam"></textarea>
+    <button id="send" type="submit">Gửi</button>
+  </div>
+</form>
+
+<script>
+const feed = document.getElementById('feed');
+const filesEl = document.getElementById('files');
+const countEl = document.getElementById('count');
+const promptEl = document.getElementById('prompt');
+const sendBtn = document.getElementById('send');
+
+filesEl.onchange = () => countEl.textContent = filesEl.files.length ? filesEl.files.length + ' ảnh' : '';
+
+// khôi phục job cũ qua F5 (không lưu ảnh input, chỉ id + trạng thái)
+const KEY = 'kontext_jobs';
+function saveJobs(list) { localStorage.setItem(KEY, JSON.stringify(list)); }
+function loadJobs() { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } }
+
+function makeCard(id, inputURL) {
+  const c = document.createElement('div');
+  c.className = 'card';
+  c.dataset.id = id;
+  c.innerHTML = `${inputURL ? `<img class="in" src="${inputURL}">` : ''}
+    <div class="body"><div class="status">Đang gửi…</div></div>`;
+  feed.appendChild(c);
+  return c;
+}
+
+function setStatus(card, text, cls='') {
+  const s = card.querySelector('.status');
+  s.textContent = text; s.className = 'status ' + cls;
+}
+
+async function poll(id, card) {
+  while (true) {
+    let d;
+    try { d = await (await fetch('/status/' + id)).json(); }
+    catch { setStatus(card, '❌ mất kết nối server', 'err'); return; }
+    if (d.status === 'done') {
+      setStatus(card, '✅ Xong');
+      const img = document.createElement('img');
+      img.className = 'out'; img.src = d.url + '?t=' + Date.now();
+      const dl = document.createElement('a');
+      dl.href = d.url; dl.download = 'kontext-' + id + '.png';
+      dl.textContent = '⬇ Tải về'; dl.className = 'dl';
+      const body = card.querySelector('.body');
+      body.appendChild(img); body.appendChild(dl);
+      return;
+    }
+    if (d.status === 'error') { setStatus(card, '❌ ComfyUI báo lỗi job này', 'err'); return; }
+    if (d.status === 'queued') setStatus(card, '⏳ Đang xếp hàng' + (d.position ? ' #' + d.position : ''));
+    else setStatus(card, '⚙️ Đang chạy…');
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const files = [...filesEl.files];
+  if (!files.length) { alert('Chọn ít nhất 1 ảnh.'); return; }
+  sendBtn.disabled = true;
+
+  const fd = new FormData();
+  fd.append('prompt', promptEl.value);
+  files.forEach(f => fd.append('images', f));
+
+  // card tạm cho mỗi ảnh (theo đúng thứ tự)
+  const cards = files.map(f => makeCard('', URL.createObjectURL(f)));
+
+  try {
+    const res = await fetch('/generate', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    const { jobs } = await res.json();
+    const saved = loadJobs();
+    jobs.forEach((id, i) => {
+      cards[i].dataset.id = id;
+      saved.push(id);
+      poll(id, cards[i]);
+    });
+    saveJobs(saved);
+  } catch (err) {
+    cards.forEach(c => setStatus(c, '❌ ' + err.message, 'err'));
+  } finally {
+    sendBtn.disabled = false;
+    filesEl.value = ''; countEl.textContent = '';
+  }
+};
+
+// nạp lại job cũ sau F5
+for (const id of loadJobs()) {
+  const c = makeCard(id, null);
+  poll(id, c);
+}
+</script>
+</body>
+</html>
