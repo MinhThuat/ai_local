@@ -8,6 +8,7 @@ Cần: ComfyUI đang chạy ở 127.0.0.1:8188 + file workflow_api.json (Save AP
 import copy
 import json
 import os
+import random
 import sys
 
 import requests
@@ -68,8 +69,10 @@ def _title(node) -> str:
     return (node.get("_meta", {}) or {}).get("title", "").strip().upper()
 
 
-def build_job(image_name: str, prompt_en: str) -> dict:
-    """Copy workflow, vá node ảnh + node prompt."""
+def build_job(
+    image_name: str, prompt_en: str, seed: int | None = None, guidance: float | None = None
+) -> dict:
+    """Copy workflow, vá node ảnh + prompt + seed + guidance (guidance cao = thoát ly mẫu nhiều)."""
     wf = copy.deepcopy(base_workflow())
 
     load_image_nodes = [n for n in wf.values() if n.get("class_type") == "LoadImage"]
@@ -77,6 +80,18 @@ def build_job(image_name: str, prompt_en: str) -> dict:
         raise HTTPException(500, "Workflow không có node LoadImage.")
     for n in load_image_nodes:
         n["inputs"]["image"] = image_name
+
+    if guidance is not None:
+        for n in wf.values():
+            if n.get("class_type") == "FluxGuidance":
+                n["inputs"]["guidance"] = guidance
+
+    # seed ngẫu nhiên -> mỗi job ra 1 ảnh khác nhau (không có node này thì thôi)
+    if seed is None:
+        seed = random.randint(0, 2**63 - 1)
+    for n in wf.values():
+        if "seed" in n.get("inputs", {}):
+            n["inputs"]["seed"] = seed
 
     encoders = [n for n in wf.values() if n.get("class_type") == "CLIPTextEncode"]
     titled = [n for n in encoders if _title(n) == "PROMPT"]
@@ -124,16 +139,24 @@ def index():
 
 
 @app.post("/generate")
-async def generate(prompt: str = Form(""), images: list[UploadFile] = File(...)):
+async def generate(
+    prompt: str = Form(""),
+    count: int = Form(1),
+    guidance: float = Form(2.5),
+    images: list[UploadFile] = File(...),
+):
     if not images:
         raise HTTPException(400, "Cần ít nhất 1 ảnh.")
+    count = max(1, min(count, 8))  # mỗi ảnh ra tối đa 8 biến thể
+    guidance = max(1.0, min(guidance, 6.0))  # 2.5 = giữ mẫu, ~4-5 = đổi mạnh
     try:
         prompt_en = translate_vi_en(prompt)
         jobs = []
         for img in images:
             name = comfy_upload(img)
-            wf = build_job(name, prompt_en)
-            jobs.append(comfy_submit(wf))
+            for _ in range(count):  # mỗi biến thể 1 job, seed khác nhau
+                wf = build_job(name, prompt_en, guidance=guidance)
+                jobs.append(comfy_submit(wf))
         return {"jobs": jobs, "prompt_en": prompt_en}
     except HTTPException:
         raise
